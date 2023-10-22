@@ -1,0 +1,16 @@
+---
+- name: Deploy LAMP stack and Laravel application on slave node
+
+  hosts: all
+  remote_user: vagrant
+  become: 'yes'
+
+  tasks:
+  - name: Copy the bash script to the slave node
+    copy:
+      src: master-lamp.sh
+      dest: /home/vagrant/master-lamp.sh
+      mode: 493
+
+  - name: Execute the bash script on the slave node
+    command: sh /home/vagrant/master-lamp.sh
