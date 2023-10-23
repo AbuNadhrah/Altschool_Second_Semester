@@ -1,51 +1,67 @@
 #!/bin/bash
 
+set -e 
+
 # 2 - Setup LAMP on master
 
-set -e
-
-###User Management segment
-#Change here - this is running directly on the master, so I'll remove the checking
-
-    # Create a user named altschool only on the master VM
-    sudo useradd -m altschool
-    # Set a password for the altschool user
-    echo "altschool:password" | sudo chpasswd
-    # Give the altschool user root privileges
-    sudo usermod -aG sudo altschool
-
+######################################################################
+#First update the server
 
 echo -e "\n\nUpdating Apt Packages and upgrading latest patches\n"
 
 # Update packages
-sudo apt-get update -y
+sudo apt update -y && sudo apt upgrade -y
 
-# Install Apache
-sudo apt-get install -y apache2
+# Then, Install Apache and enable it to launch on start-up
+sudo apt install apache2 -y
+sudo systemctl enable apache2
 
-#Open the firewall just in case
-echo -e "\n\nAdding firewall rule to Apache\n"
-sudo ufw allow in "Apache"
+#Now install MySQL
+sudo apt-get install -y mysql-server
+sudo mysql_secure_installation
 
-sudo ufw status
+# And Install PHP and related modules
+sudo apt-get install -y php libapache2-mod-php php-mysql
+
+#Restart Apache
+sudo systemctl restart apache2
+########################################################################
+
 
 # 3 - Clone Laravel from github
-cd /var/www/html && git clone https://github.com/laravel/laravel.git
+#######################################################################
+sudo apt install git -y
+sudo git clone https://github.com/laravel/laravel.git /var/www/html/laravel 
 
-#composer for laravel
-sudo apt-install curl
-curl -sS getcomposer.org/installer | php
+#Change ownership of the laravel directory
+sudo chown -R www-data:www-data /var/www/html/laravel
 
-sudo mv composer.phar /usr/locl/bin/composer
+#Install composer, dependency manager for php
+sudo apt install curl -y
+curl -sS https://getcomposer.org/installer | sudo php -- --install-dir=/usr/local/bin --filename=composer
 
-composer --version
+#install the laravel dependencies using compser
+cd /var/www/html/laravel
+sudo composer install
 
-#change some env variables in the laravel .env
-sudo sed -i 's/DB_DATABASE=laravel/DB_DATABASE=dudu/' /var/www/html/laravel/.env
+#Copy the example environment file and generate an application key for Laravel
+cd /var/www/html/laravel
+sudo cp .env.example .env
+sudo php artisan key:generate
 
-sudo sed -i 's/DB_USERNAME=laravel/DB_USERNAME=dudu/' /var/www/html/laravel/.env
+#Create new database for Laravel and set the credentials using $1 and $2 as supplied when calling the script
+sudo mysql -e "CREATE DATABASE '$1';"
+sudo mysql -e "CREATE USER '$1'@'localhost' IDENTIFIED BY '$2';"
+sudo mysql -e "GRANT ALL ON $1.* TO '$1'@'localhost';"
+sudo mysql -e "FLUSH PRIVILEGES;"
 
-sudo sed -i 's/DB_DATABASE=/DB_DATABASE=duduCOM/' /var/www/html/laravel/.env
+#Edit the .env file and update the database credentials
+sudo sed -i -b 's/DB_DATABASE=laravel/DB_DATABASE=dudu/' /var/www/html/laravel/.env
+sudo sed -i -b 's/DB_USERNAME=laravel/DB_USERNAME=dudu/' /var/www/html/laravel/.env
+sudo sed -i -b 's/DB_DATABASE=/DB_DATABASE=duduCOM/' /var/www/html/laravel/.env
+
+#Run the database migrations to create the necessary tables for Laravel
+sudo php artisan migrate
 
 #Set permissions
 echo -e "\n\nPermissions for /var/www/html/laravel\n"
@@ -53,20 +69,19 @@ sudo chown -R www-data:www-data /var/www/html/laravel
 sudo chmod -R 775 /var/www/html/laravel
 sudo chmod -R 775 /var/www/html/laravel/storage
 sudo chmod -R 775 /var/www/html/laravel/bootstrap/cache
-cd /var/www/html/laravel && cp .env.example .env
+
 
 echo -e "\n\n Permissions have been set\n"
 
 #Configure Apache
 
-cat <<EOF > /etc/apache2/sites-available/laravel.conf
+sudo tee /etc/apache2/sites-available/laravel.conf <<EOF 
 <VirtualHost *:80>
-    ServerAdmin admin@example.com
+    ServerAdmin nigonus@yahoo.com
     ServerName 192.168.56.106
     DocumentRoot /var/www/html/laravel/public
 
     <Directory /var/www/html/laravel>
-    Options Indexes Multiviews FollowSymLinks
     AllowOverride All
     Require all granted
     </Directory>
@@ -77,41 +92,13 @@ cat <<EOF > /etc/apache2/sites-available/laravel.conf
 
 EOF
 
-echo -e "\n\nEnabling Modules\n"
+#Enable the laravel virtual host and disable the default one
+sudo a2ensite laravel.conf
+sudo a2dissite 000-default.conf
+
+#Enable the Apache rewrite module to support laravel routes
 sudo a2enmod rewrite
-sudo phpenmod mcrypt
 
-sudo sed -i 's/DirectoryIndex index.html index.cgi index.pl index.xhtml index.htm/DirectoryIndex index.php index.html index.cgi index.pl index.xhtml index.htm/' /etc/apache2/mods-enabled/dir.conf
-
-
-# Install MySQL and set root password
-echo -e "\n\nInstalling MySQL\n"
-
-sudo debconf-set-selections <<< 'mysql-server mysql-server/root_password password root'
-sudo debconf-set-selections <<< 'mysql-server mysql-server/root_password_again password root'
-sudo apt-get install -y mysql-server
-
-#Configure MySql
-
-echo "Creating MySQL user and database"
-PASS=$2
-if [ -z "$2" ]; then
-    PASS='openssl rand -base64 8'
-fi 
-
-mysql -u root <<MYSQL_SCRIPT
-    CREATE DATABASE $1;
-    CREATE USER '$1'@'localhost' IDENTIFIED BY '$PASS';
-    GRANT ALLPRIVILEGES ON $1.* TO '$1'@'localhost';
-    FLUSH PRIVILEGES;
-MYSQL_SCRIPT
-
-# Install PHP and related modules
-sudo apt-get install -y php libapache2-mod-php php-mysql
-
-sudo sed -i 's/cgi.fix_pathinfo=1/cgi.fix_pathinfo=0/' /etc/php/8.2/apache2/php.ini
-
-# Restart Apache
-sudo service apache2 restart
-
+#Restart Apache to apply the changes
+sudo systemctl restart apache2
 
